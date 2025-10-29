@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GIF Inline Exporter — embed downloadedImages as Base64 GIFs + optional animated WebP</title>
+<style>
+  :root{
+    --bg:#0f1115;--card:#151922;--muted:#8b94a7;--text:#e6ecf5;--accent:#4da3ff;--good:#3ecf8e;--warn:#ffce4d;--bad:#ff6b6b;--border:#222838
+  }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue',Arial,'Noto Sans',sans-serif;line-height:1.35}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px}
+  h1{margin:0 0 10px 0;font-size:22px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin:12px 0}
+  label{font-size:12px;color:var(--muted)}
+  input[type="file"],select{width:100%;margin-top:6px;background:#0d1016;border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px}
+  button{background:var(--accent);border:none;color:#031222;padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .col{flex:1;min-width:260px}
+  .log{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;font-size:12px;background:#0b0f15;border:1px dashed var(--border);padding:10px;border-radius:8px;white-space:pre-wrap;max-height:320px;overflow:auto}
+  progress{width:100%}
+  .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+  .hint{font-size:12px;color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>GIF Inline Exporter <span class="pill">Embeds <code>downloadedImages[]</code> as <code>data:image/gif;base64,...</code></span></h1>
+
+    <div class="card">
+      <p><strong>What this does</strong>: Takes your JEFIT JSON export and your <em>jefit_export</em> folder (picked below), finds each GIF listed in <code>downloadedImages</code>, and replaces the paths with Base64 <em>data URIs</em> that preserve GIF animation. Optionally, also generates <strong>animated WebP</strong> versions and writes them to <code>embeddedImagesWebP[]</code> (lossless; animation preserved).</p>
+      <ol>
+        <li>Pick your JSON export (e.g. <code>jefit_export_jefit_exercises.json</code>).</li>
+        <li>Pick your <strong>jefit_export</strong> directory (it will scan subfolders).</li>
+        <li>Choose options, then click <em>Process</em> to inline/convert images.</li>
+      </ol>
+    </div>
+
+    <div class="row">
+      <div class="card col">
+        <label>1) Choose JSON export</label>
+        <input id="jsonFile" type="file" accept="application/json,.json" />
+      </div>
+      <div class="card col">
+        <label>2) Choose <code>jefit_export</code> folder (contains per-exercise subfolders)</label>
+        <input id="dirPicker" type="file" webkitdirectory directory />
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="grid2">
+        <div>
+          <label>Mode</label>
+          <select id="mode">
+            <option value="replace" selected>Replace downloadedImages with data URIs</option>
+            <option value="append">Append embeddedImages (keep downloadedImages)</option>
+          </select>
+        </div>
+        <div>
+          <label><input type="checkbox" id="optWebP" /> Also create <strong>animated WebP (lossless)</strong> to <code>embeddedImagesWebP[]</code></label>
+          <div class="hint">First run will load an encoder (~20–30 MB) from a CDN. <strong>Offline fallback:</strong> place <code>ffmpeg.min.js</code>, <code>ffmpeg-core.js</code>, and <code>ffmpeg-core.wasm</code> in a local <code>./ffmpeg/</code> folder next to this HTML, then enable the checkbox.</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <div class="col">
+          <button id="processBtn">Process & Inline</button>
+        </div>
+        <div class="col"></div>
+      </div>
+      <div style="margin-top:12px">
+        <progress id="prog" value="0" max="100"></progress>
+        <div id="stats" class="pill" style="margin-left:8px">Idle</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div class="col">
+          <button id="downloadBtn" disabled>Download Inlined JSON</button>
+        </div>
+        <div class="col">
+          <label>Output filename</label>
+          <input id="outName" placeholder="jefit_export_inlined.json" />
+        </div>
+      </div>
+    </div>
+
+    <!-- JS Array export -->
+    <div class="card">
+      <div class="row">
+        <div class="col">
+          <label>Variable name for array (JS)</label>
+          <input id="varName" placeholder="exercises" />
+        </div>
+        <div class="col">
+          <label>&nbsp;</label>
+          <div class="row">
+            <button id="downloadArrayBtn" disabled>Download JS Array</button>
+            <button id="copyArrayBtn" disabled>Copy Array to Clipboard</button>
+          </div>
+        </div>
+      </div>
+      <p class="pill" style="margin-top:8px">Exports just <code>results[]</code> as a JavaScript array — perfect for pasting straight into your code.</p>
+    </div>
+
+    <!-- Self‑test -->
+    <div class="card">
+      <div class="row">
+        <div class="col">
+          <button id="selfTestBtn" class="secondary">Run Self‑Test</button>
+        </div>
+      </div>
+      <p class="pill" style="margin-top:8px">Runs quick checks on event wiring & array export logic.</p>
+      <div class="row" style="margin-top:8px">
+        <div class="col">
+          <button id="checkAssetsBtn" class="secondary">Check Encoder Assets</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label>Log</label>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const $ = sel => document.querySelector(sel);
+  const logEl = $('#log');
+  const statsEl = $('#stats');
+  const prog = $('#prog');
+  const optWebP = $('#optWebP');
+  let lastOutput = null;
+  let ffmpeg = null; // lazy‑loaded
+
+  const getVarName = () => {
+    const v = (document.querySelector('#varName')?.value || 'exercises').trim();
+    const safe = v.replace(/[^A-Za-z0-9_$]/g,'_');
+    return safe || 'exercises';
+  };
+
+  function log(msg){ logEl.textContent += msg + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+  function setStats(txt){ statsEl.textContent = txt; }
+  function normalise(p){ return (p||'').replace(/[\\]+/g,'/'); }
+
+  function buildFileIndex(fileList){
+    // Builds a Map of relativePathLower -> File
+    const map = new Map();
+    for(const f of fileList){
+      // webkitRelativePath includes the selected folder name as the first segment
+      const rel = normalise(f.webkitRelativePath || f.name);
+      map.set(rel.toLowerCase(), f);
+      // Also index without the leading top folder (e.g., "jefit_export/") for JSONs that already include it
+      const parts = rel.split('/');
+      if(parts.length>1){
+        const noTop = parts.slice(1).join('/');
+        map.set(noTop.toLowerCase(), f);
+      }
+    }
+    return map;
+  }
+
+  async function fileToDataUrl(file){
+    // Use FileReader.readAsDataURL to preserve GIF bytes/animation
+    return new Promise((resolve, reject)=>{
+      const fr = new FileReader();
+      fr.onerror = () => reject(fr.error);
+      fr.onload = () => resolve(fr.result);
+      fr.readAsDataURL(file);
+    });
+  }
+
+  // Robust multi-CDN loader for FFmpeg.wasm (animated WebP)
+  async function ensureFFmpeg(){
+    if(ffmpeg) return ffmpeg;
+    log('[info] Loading WebP encoder (FFmpeg.wasm)…');
+
+    const cdnCandidates = [
+      // --- Local offline fallback (place files in ./ffmpeg next to this HTML) ---
+      {
+        type: 'umd-local', base: './ffmpeg/',
+        loader: async () => {
+          await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='./ffmpeg/ffmpeg.min.js'; s.onload=res; s.onerror=()=>rej(new Error('UMD load failed (local ./ffmpeg)')); document.head.appendChild(s); });
+          if(!window.FFmpeg || !window.FFmpeg.createFFmpeg) throw new Error('FFmpeg UMD global not found (local)');
+          return { createFFmpeg: window.FFmpeg.createFFmpeg, corePath: new URL('./ffmpeg/ffmpeg-core.js', window.location.href).href };
+        }
+      },
+      // --- CDN ESM paths ---
+      {
+        type: 'esm', base: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/',
+        loader: async () => {
+          const { createFFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js');
+          return { createFFmpeg, corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js' };
+        }
+      },
+      {
+        type: 'esm', base: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/',
+        loader: async () => {
+          const { createFFmpeg } = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js');
+          return { createFFmpeg, corePath: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js' };
+        }
+      },
+      // --- CDN UMD fallbacks ---
+      {
+        type: 'umd', base: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/',
+        loader: async () => {
+          await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js'; s.onload=res; s.onerror=()=>rej(new Error('UMD load failed (jsDelivr)')); document.head.appendChild(s); });
+          if(!window.FFmpeg || !window.FFmpeg.createFFmpeg) throw new Error('FFmpeg UMD global not found');
+          return { createFFmpeg: window.FFmpeg.createFFmpeg, corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js' };
+        }
+      },
+      {
+        type: 'umd', base: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/',
+        loader: async () => {
+          await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js'; s.onload=res; s.onerror=()=>rej(new Error('UMD load failed (unpkg)')); document.head.appendChild(s); });
+          if(!window.FFmpeg || !window.FFmpeg.createFFmpeg) throw new Error('FFmpeg UMD global not found');
+          return { createFFmpeg: window.FFmpeg.createFFmpeg, corePath: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js' };
+        }
+      }
+    ];
+
+    let lastErr;
+    for(const cand of cdnCandidates){
+      try{
+        const { createFFmpeg, corePath } = await cand.loader();
+        ffmpeg = createFFmpeg({ log: false, corePath });
+        await ffmpeg.load();
+        log(`[ok] Encoder ready via ${cand.type} from ${cand.base}`);
+        return ffmpeg;
+      }catch(e){
+        lastErr = e;
+        log(`[warn] FFmpeg load attempt failed (${cand.type}): ${e.message}`);
+      }
+    }
+    throw lastErr || new Error('Unable to load FFmpeg');
+  }
+
+  async function gifFileToAnimatedWebPDataUrl(file){
+    const ff = await ensureFFmpeg();
+    const inName = 'in.gif';
+    const outName = 'out.webp';
+    const u8 = new Uint8Array(await file.arrayBuffer());
+    ff.FS('writeFile', inName, u8);
+    // Lossless, preserve animation, loop forever
+    await ff.run('-i', inName, '-loop', '0', '-lossless', '1', outName);
+    const out = ff.FS('readFile', outName);
+    // Build data URL
+    const blob = new Blob([out.buffer], { type: 'image/webp' });
+    const dataUrl = await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(blob); });
+    // Cleanup
+    try{ ff.FS('unlink', inName); ff.FS('unlink', outName); }catch(_){ }
+    return dataUrl;
+  }
+
+  async function inlineAll(){
+    logEl.textContent = '';
+    setStats('Preparing…');
+    prog.value = 0; prog.max = 100;
+
+    const jsonFile = $('#jsonFile').files[0];
+    const dirFiles = $('#dirPicker').files;
+    const mode = $('#mode').value;
+    const doWebP = !!optWebP?.checked;
+
+    if(!jsonFile){ alert('Pick the JSON export first.'); return; }
+    if(!dirFiles || !dirFiles.length){ alert('Pick the jefit_export directory.'); return; }
+
+    const text = await jsonFile.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch(e){ alert('Invalid JSON file: ' + e.message); return; }
+
+    if(!data || !Array.isArray(data.results)){
+      alert('JSON must contain a top-level "results" array.');
+      return;
+    }
+
+    const index = buildFileIndex(dirFiles);
+    log(`[info] Indexed ${index.size} files from selected directory.`);
+
+    if(doWebP){
+      try{ await ensureFFmpeg(); }
+      catch(e){ alert('Failed to load encoder: '+e.message); return; }
+    }
+
+    let totalRefs = 0, converted = 0, missing = 0, kept = 0, webpMade = 0;
+
+    // Estimate progress steps
+    const records = data.results;
+    const totalRecords = records.length;
+    let processedRecords = 0;
+
+    for(const rec of records){
+      const arr = Array.isArray(rec.downloadedImages) ? rec.downloadedImages : [];
+      if(!arr.length){ kept++; processedRecords++; prog.value = Math.round((processedRecords/totalRecords)*100); continue; }
+
+      totalRefs += arr.length;
+      const embedded = [];
+      const embeddedWebP = [];
+
+      for(const p of arr){
+        // Skip if already data: URL
+        if(typeof p === 'string' && p.startsWith('data:')){ embedded.push(p); continue; }
+        const key = normalise(p).replace(/^\/?/, '').toLowerCase();
+        // Try direct match
+        let file = index.get(key);
+        // If not found, try stripping an optional leading 'jefit_export/'
+        if(!file && key.startsWith('jefit_export/')){
+          file = index.get(key.slice('jefit_export/'.length));
+        }
+        // Last resort: match by filename only (may be ambiguous; prefer first hit)
+        if(!file){
+          const filename = key.split('/').pop();
+          for(const [k,v] of index.entries()){
+            if(k.endsWith('/'+filename)){ file = v; break; }
+          }
+        }
+
+        if(!file){
+          log(`[warn] Missing: ${p}`);
+          missing++;
+          continue;
+        }
+        try{
+          const dataUrl = await fileToDataUrl(file); // preserves GIF
+          // Ensure MIME is image/gif (some systems label as octet-stream)
+          const corrected = dataUrl.startsWith('data:image/gif') ? dataUrl : `data:image/gif;base64,${dataUrl.split(',')[1]}`;
+          embedded.push(corrected);
+          converted++;
+
+          if(doWebP){
+            try{
+              const webp = await gifFileToAnimatedWebPDataUrl(file);
+              embeddedWebP.push(webp);
+              webpMade++;
+            }catch(err){
+              log(`[warn] WebP conversion failed for ${p}: ${err.message}`);
+            }
+          }
+        }catch(e){
+          log(`[error] Failed to read ${p}: ${e.message}`);
+          missing++;
+        }
+      }
+
+      if(embedded.length){
+        if(mode === 'append') rec.embeddedImages = embedded;
+        else rec.downloadedImages = embedded;
+      }
+      if(doWebP && embeddedWebP.length){
+        rec.embeddedImagesWebP = embeddedWebP; // always append per your instruction
+      }
+
+      processedRecords++;
+      prog.value = Math.round((processedRecords/totalRecords)*100);
+    }
+
+    setStats(`Done. Records: ${totalRecords}, refs: ${totalRefs}, GIF inlined: ${converted}, WebP made: ${webpMade}, missing: ${missing}, no-images: ${kept}`);
+    lastOutput = data;
+    $('#downloadBtn').disabled = false;
+    $('#downloadArrayBtn').disabled = false;
+    $('#copyArrayBtn').disabled = false;
+  }
+
+  function download(){
+    if(!lastOutput){ alert('Nothing to download yet.'); return; }
+    const name = ($('#outName').value || 'jefit_export_inlined.json').trim();
+    const blob = new Blob([JSON.stringify(lastOutput, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  function buildArrayJS(){
+    const varName = getVarName();
+    const arrayData = Array.isArray(lastOutput?.results) ? lastOutput.results : (Array.isArray(lastOutput) ? lastOutput : []);
+    return `const ${varName} = ${JSON.stringify(arrayData, null, 2)};\nexport default ${varName};\n`;
+  }
+
+  function downloadArray(){
+    if(!lastOutput){ alert('Nothing to download yet.'); return; }
+    const js = buildArrayJS();
+    const blob = new Blob([js], {type:'text/javascript'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=(getVarName()+'.js'); document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  async function copyArray(){
+    if(!lastOutput){ alert('Nothing to copy yet.'); return; }
+    const js = buildArrayJS();
+    try{ await navigator.clipboard.writeText(js); log('[ok] JS array copied to clipboard.'); }
+    catch(e){ log('[warn] Clipboard write failed: '+e.message); }
+  }
+
+  // --- Event wiring (fixed syntax) ---
+  const processBtn = $('#processBtn');
+  if(processBtn) processBtn.addEventListener('click', inlineAll);
+  const downloadBtn = $('#downloadBtn');
+  if(downloadBtn) downloadBtn.addEventListener('click', download);
+  const downloadArrayBtn = $('#downloadArrayBtn');
+  if(downloadArrayBtn) downloadArrayBtn.addEventListener('click', downloadArray);
+  const copyArrayBtn = $('#copyArrayBtn');
+  if(copyArrayBtn) copyArrayBtn.addEventListener('click', copyArray);
+
+  // --- Self‑tests (no external files required) ---
+  function assert(name, cond){ log((cond? '[PASS] ':'[FAIL] ')+name); return !!cond; }
+  function runSelfTests(){
+    log('--- Self‑Test start ---');
+    // 1) Var name sanitisation
+    document.querySelector('#varName').value = 'my var-name$';
+    const vn = getVarName();
+    assert('Var name sanitised', vn === 'my_var_name$');
+
+    // 2) buildArrayJS outputs a valid snippet using results[]
+    lastOutput = { results:[{ id:1, downloadedImages:['data:image/gif;base64,R0lGODlhAQABAIAAAAUEBA=='] }] };
+    const js = buildArrayJS();
+    assert('Array export contains export default', js.includes('export default'));
+    assert('Array export contains data URI', js.includes('data:image/gif;base64,'));
+
+    // 3) Event handlers are attached
+    const processBtn = $('#processBtn');
+    const downloadBtn = $('#downloadBtn');
+    const downloadArrayBtn = $('#downloadArrayBtn');
+    const copyArrayBtn = $('#copyArrayBtn');
+    const handlersOK = !!processBtn && !!downloadBtn && !!downloadArrayBtn && !!copyArrayBtn;
+    assert('Buttons present', handlersOK);
+
+    // 4) WebP option toggle present
+    assert('WebP checkbox present', !!document.querySelector('#optWebP'));
+
+    // 5) Mode select default
+    const modeSel = document.querySelector('#mode');
+    assert('Mode select present', !!modeSel);
+    assert('Mode default is replace', modeSel && modeSel.value === 'replace');
+
+    // 6) Normalise backslashes
+    assert('Normalise converts backslashes', normalise('a\\b\\c') === 'a/b/c');
+
+    log('--- Self‑Test end ---');
+  }
+  const selfTestBtn = $('#selfTestBtn');
+  if(selfTestBtn) selfTestBtn.addEventListener('click', runSelfTests);
+
+  // Encoder assets checker
+  async function checkAssets(){
+    log('[info] Checking ./ffmpeg assets…');
+    const base = new URL('./ffmpeg/', window.location.href).href;
+    const files = ['ffmpeg.min.js','ffmpeg-core.js','ffmpeg-core.wasm'];
+    for(const f of files){
+      try{
+        const url = base + f + '?t=' + Date.now();
+        const res = await fetch(url, { cache: 'no-store' });
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const mb = (blob.size/1024/1024).toFixed(2);
+        log(`[ok] ${f} : ${mb} MB`);
+      }catch(e){
+        log(`[FAIL] ${f} : ${e.message}`);
+      }
+    }
+    if(!crossOriginIsolated){
+      log('[info] crossOriginIsolated = false. If FFmpeg still fails on file://, serve via a local web server, e.g. "python -m http.server 5500" then open http://localhost:5500/index.html');
+    }
+  }
+  const checkBtn = document.querySelector('#checkAssetsBtn');
+  if(checkBtn) checkBtn.addEventListener('click', checkAssets);
+})();
+</script>
+</body>
+</html>
